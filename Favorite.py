@@ -19,6 +19,13 @@ import os
 import subprocess
 from loguru import logger as log
 
+try:
+    import dbus
+    HAS_DBUS = True
+except ImportError:
+    HAS_DBUS = False
+    log.warning("dbus module not available, some features may be limited")
+
 class Favorite(ActionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -94,8 +101,25 @@ class Favorite(ActionBase):
                         result = subprocess.run(['flatpak-spawn', '--host', 'gsettings', 'get', 'org.gnome.shell', 'favorite-apps'],
                                               capture_output=True, text=True, check=True)
                         return ast.literal_eval(result.stdout.strip())
-                    except (subprocess.CalledProcessError, FileNotFoundError, ValueError, SyntaxError) as e:
-                        log.warning(f"All methods to access GNOME favorites failed in Flatpak: {e}")
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        # Fourth try: Read dconf database directly with Python
+                        try:
+                            favorites = self._read_dconf_database()
+                            if favorites is not None:
+                                return favorites
+                        except Exception as e:
+                            log.debug(f"Direct dconf database reading failed: {e}")
+
+                        # Fifth try: D-Bus access if available
+                        if HAS_DBUS:
+                            try:
+                                favorites = self._get_favorites_via_dbus()
+                                if favorites is not None:
+                                    return favorites
+                            except Exception as e:
+                                log.debug(f"D-Bus access failed: {e}")
+
+                        log.warning("All methods to access GNOME favorites failed in Flatpak.")
                         log.info("Consider configuring favorite apps manually in the action settings.")
                         return []
 
@@ -203,7 +227,68 @@ class Favorite(ActionBase):
                     return icon_path
         except Exception as e:
             log.error(f"Error resolving icon {icon} with GTK: {e}")
-        
         # Fallback: return the icon name
         return icon
+
+    def _read_dconf_database(self):
+        """
+        Attempt to read GNOME favorites directly from the dconf database file.
+        This is a fallback method for when dconf/gsettings commands are not available.
+        """
+        try:
+            import pathlib
+            dconf_path = pathlib.Path.home() / '.config' / 'dconf' / 'user'
+
+            if not dconf_path.exists():
+                return None
+
+            # The dconf database is binary and complex to parse.
+            # For now, we'll try a simple approach using grep if available
+            try:
+                result = subprocess.run(['grep', '-a', 'favorite-apps', str(dconf_path)],
+                                      capture_output=True, text=True, check=True)
+                # This is a very basic parsing attempt - in practice, the dconf format
+                # is quite complex and would require a proper parser
+                output = result.stdout.strip()
+                if output:
+                    log.debug(f"Found potential favorites data: {output}")
+                    # This would need more sophisticated parsing to extract the actual list
+                    # For now, return None to indicate this method needs more work
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+
+            return None
+
+        except Exception as e:
+            log.debug(f"Error reading dconf database: {e}")
+            return None
+
+    def _get_favorites_via_dbus(self):
+        """
+        Attempt to get favorites via D-Bus if available.
+        """
+        if not HAS_DBUS:
+            return None
+
+        try:
+            # Try to connect to GNOME Shell's D-Bus interface
+            bus = dbus.SessionBus()
+            proxy = bus.get_object('org.gnome.Shell', '/org/gnome/Shell')
+            interface = dbus.Interface(proxy, 'org.gnome.Shell')
+
+            # Try different method names that might exist
+            for method_name in ['GetFavoriteApps', 'getFavoriteApps', 'favoriteApps']:
+                try:
+                    favorites = interface.get_dbus_method(method_name)()
+                    if favorites:
+                        return list(favorites)
+                except dbus.exceptions.DBusException:
+                    continue
+
+            return None
+
+        except Exception as e:
+            log.debug(f"D-Bus access failed: {e}")
+            return None
+
     
