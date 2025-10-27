@@ -22,9 +22,13 @@ from loguru import logger as log
 class Favorite(ActionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self.has_configuration = True
-        self.favorites = self.get_favorites()
+        try:
+            self.favorites = self.get_favorites()
+        except Exception as e:
+            log.error(f"Failed to load favorites during initialization: {e}")
+            self.favorites = []
         
     def on_ready(self):
         self.set_media(media_path=os.path.join(self.plugin_base.PATH, "assets", "favorites.png"), size=0.8)
@@ -70,15 +74,30 @@ class Favorite(ActionBase):
 
     def get_favorites(self):
         if os.getenv('FLATPAK_ID'):
-            # In Flatpak, use dconf directly since gsettings may not work
+            # In Flatpak, try multiple approaches to access favorites
             try:
+                # First try: dconf command (if available)
                 result = subprocess.run(['dconf', 'read', '/org/gnome/shell/favorite-apps'],
                                       capture_output=True, text=True, check=True)
                 favorites_str = result.stdout.strip()
                 return ast.literal_eval(favorites_str) if favorites_str else []
-            except (subprocess.CalledProcessError, ValueError, SyntaxError) as e:
-                log.error(f"Error reading favorites via dconf: {e}")
-                return []
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                # Second try: Use flatpak-spawn to run dconf on host
+                try:
+                    result = subprocess.run(['flatpak-spawn', '--host', 'dconf', 'read', '/org/gnome/shell/favorite-apps'],
+                                          capture_output=True, text=True, check=True)
+                    favorites_str = result.stdout.strip()
+                    return ast.literal_eval(favorites_str) if favorites_str else []
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Third try: Use flatpak-spawn to run gsettings on host
+                    try:
+                        result = subprocess.run(['flatpak-spawn', '--host', 'gsettings', 'get', 'org.gnome.shell', 'favorite-apps'],
+                                              capture_output=True, text=True, check=True)
+                        return ast.literal_eval(result.stdout.strip())
+                    except (subprocess.CalledProcessError, FileNotFoundError, ValueError, SyntaxError) as e:
+                        log.warning(f"All methods to access GNOME favorites failed in Flatpak: {e}")
+                        log.info("Consider configuring favorite apps manually in the action settings.")
+                        return []
 
         # Non-Flatpak: use gsettings
         try:
