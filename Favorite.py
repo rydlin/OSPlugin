@@ -57,16 +57,33 @@ class Favorite(ActionBase):
             return
         self.launch_app(self.favorites[favorite - 1])
 
-    def launch_app(self,desktop_name):
+    def launch_app(self, desktop_name):
         try:
             subprocess.run(['gtk-launch', desktop_name], check=True)
             log.info(f"Launched {desktop_name}")
         except subprocess.CalledProcessError as e:
             log.error(f"Failed to launch {desktop_name}: {e}")
+        except FileNotFoundError:
+            log.error(f"gtk-launch command not found. Cannot launch {desktop_name}")
+        except Exception as e:
+            log.error(f"Unexpected error launching {desktop_name}: {e}")
 
     def get_favorites(self):
+        if os.getenv('FLATPAK_ID'):
+            # In Flatpak, use dconf directly since gsettings may not work
+            try:
+                result = subprocess.run(['dconf', 'read', '/org/gnome/shell/favorite-apps'],
+                                      capture_output=True, text=True, check=True)
+                favorites_str = result.stdout.strip()
+                return ast.literal_eval(favorites_str) if favorites_str else []
+            except (subprocess.CalledProcessError, ValueError, SyntaxError) as e:
+                log.error(f"Error reading favorites via dconf: {e}")
+                return []
+
+        # Non-Flatpak: use gsettings
         try:
-            result = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'favorite-apps'], capture_output=True, text=True, check=True)
+            result = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'favorite-apps'],
+                                  capture_output=True, text=True, check=True)
             return ast.literal_eval(result.stdout.strip())
         except (subprocess.CalledProcessError, ValueError, SyntaxError) as e:
             log.error(f"Error retrieving favorites: {e}")
