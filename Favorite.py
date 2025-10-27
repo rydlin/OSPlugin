@@ -66,18 +66,64 @@ class Favorite(ActionBase):
         if favorite < 1 or favorite > len(self.favorites):
             log.warning(f"Invalid favorite index: {favorite}. Must be between 1 and {len(self.favorites)}.")
             return
-        self.launch_app(self.favorites[favorite - 1])
+        # Ensure favorite is an integer for list indexing
+        favorite_index = int(favorite) - 1
+        desktop_name = self.favorites[favorite_index]
 
-    def launch_app(self, desktop_name):
+        # Try to get the executable path from the desktop file
+        exec_path = self._get_executable_from_desktop(desktop_name)
+        if exec_path:
+            self.launch_app(exec_path, desktop_name)
+        else:
+            # Fallback to desktop file name
+            self.launch_app(desktop_name, desktop_name)
+
+    def _get_executable_from_desktop(self, desktop_name):
+        """
+        Extract the executable command from a desktop file.
+        """
+        desktop_path = self.find_desktop_file(desktop_name)
+        if not desktop_path:
+            return None
+
+        try:
+            config = configparser.ConfigParser()
+            config.read(desktop_path)
+
+            if 'Desktop Entry' in config and 'Exec' in config['Desktop Entry']:
+                exec_cmd = config['Desktop Entry']['Exec'].split()[0]  # Take first part before arguments
+                # Remove field codes like %U, %F, etc.
+                exec_cmd = exec_cmd.split('%')[0].strip()
+                return exec_cmd
+        except Exception as e:
+            log.debug(f"Error reading Exec from {desktop_name}: {e}")
+
+        return None
+
+    def launch_app(self, app_command, desktop_name):
+        """
+        Launch an application using its executable command.
+        app_command can be either a desktop file name or an executable path.
+        """
         # Try multiple launch methods in order of preference
-        launch_methods = [
+        launch_methods = []
+
+        # If we have a direct executable, try running it directly first
+        if app_command and not app_command.endswith('.desktop'):
+            launch_methods.append((app_command, []))
+
+        # Then try desktop file launchers
+        launch_methods.extend([
             ('gtk-launch', [desktop_name]),
             ('gio', ['launch', desktop_name]),
             ('xdg-open', [f"applications://{desktop_name}"]),
-        ]
+        ])
 
         # In Flatpak, also try host commands
         if os.getenv('FLATPAK_ID'):
+            if app_command and not app_command.endswith('.desktop'):
+                launch_methods.append((['flatpak-spawn', '--host', app_command], []))
+
             launch_methods.extend([
                 (['flatpak-spawn', '--host', 'gtk-launch'], [desktop_name]),
                 (['flatpak-spawn', '--host', 'gio', 'launch'], [desktop_name]),
