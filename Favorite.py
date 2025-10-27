@@ -64,7 +64,7 @@ class Favorite(ActionBase):
         settings["favorite"] = round(self.favorite_row.get_value(), 1)
         self.set_settings(settings)
 
-    def event_callback(self, event: InputEvent, data: dict = None):
+    def on_key_down(self):
         favorite = self.get_settings().get("favorite", 1)
         if not self.favorites:
             log.warning("No favorite apps configured.")
@@ -76,21 +76,30 @@ class Favorite(ActionBase):
         favorite_index = int(favorite) - 1
         desktop_name = self.favorites[favorite_index]
 
-        # Extract the command name from desktop filename (remove .desktop extension)
-        command = desktop_name.replace('.desktop', '')
-
-        # Launch using the same method as EasyCommand
-        self.run_command(command)
+        # Get the actual command from the desktop file
+        command = self._get_command_from_desktop(desktop_name)
+        if command:
+            self.run_command(command)
+        else:
+            log.error(f"Could not determine command for {desktop_name}")
 
     def run_command(self, command):
-        if command is None:
+        if command is None or command.strip() == "":
+            log.warning("No command to run")
             return
 
+        original_command = command
         if is_in_flatpak():
             command = "flatpak-spawn --host " + command
 
-        p = multiprocessing.Process(target=subprocess.Popen, args=[command], kwargs={"shell": True, "start_new_session": True, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "cwd": os.path.expanduser("~")})
-        p.start()
+        try:
+            log.info(f"Running command: {command}")
+            p = multiprocessing.Process(target=subprocess.Popen, args=[command], kwargs={"shell": True, "start_new_session": True, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "cwd": os.path.expanduser("~")})
+            p.start()
+            log.debug(f"Started process for command: {original_command}")
+        except Exception as e:
+            log.error(f"Failed to run command '{original_command}': {e}")
+
         return ""
 
 
@@ -244,6 +253,32 @@ class Favorite(ActionBase):
             log.error(f"Error resolving icon {icon} with GTK: {e}")
         # Fallback: return the icon name
         return icon
+
+    def _get_command_from_desktop(self, desktop_name):
+        """
+        Extract the command to run from a desktop file.
+        """
+        desktop_path = self.find_desktop_file(desktop_name)
+        if not desktop_path:
+            log.debug(f"Desktop file not found: {desktop_name}")
+            return None
+
+        try:
+            config = configparser.ConfigParser()
+            config.read(desktop_path)
+
+            if 'Desktop Entry' in config and 'Exec' in config['Desktop Entry']:
+                exec_cmd = config['Desktop Entry']['Exec']
+                # Remove field codes like %U, %F, etc. and take first command
+                exec_cmd = exec_cmd.split('%')[0].strip()
+                # If there are arguments, take just the command
+                command = exec_cmd.split()[0]
+                log.debug(f"Found command '{command}' for {desktop_name}")
+                return command
+        except Exception as e:
+            log.debug(f"Error reading Exec from {desktop_name}: {e}")
+
+        return None
 
     def _read_dconf_database(self):
         """
