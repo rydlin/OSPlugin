@@ -17,6 +17,8 @@ import glob
 import configparser
 import os
 import subprocess
+import multiprocessing
+import threading
 from loguru import logger as log
 
 try:
@@ -25,6 +27,10 @@ try:
 except ImportError:
     HAS_DBUS = False
     log.warning("dbus module not available, some features may be limited")
+
+
+def is_in_flatpak() -> bool:
+    return os.path.isfile('/.flatpak-info')
 
 class Favorite(ActionBase):
     def __init__(self, *args, **kwargs):
@@ -70,93 +76,23 @@ class Favorite(ActionBase):
         favorite_index = int(favorite) - 1
         desktop_name = self.favorites[favorite_index]
 
-        # Try to get the executable path from the desktop file
-        exec_path = self._get_executable_from_desktop(desktop_name)
-        if exec_path:
-            self.launch_app(exec_path, desktop_name)
-        else:
-            # Fallback to desktop file name
-            self.launch_app(desktop_name, desktop_name)
+        # Extract the command name from desktop filename (remove .desktop extension)
+        command = desktop_name.replace('.desktop', '')
 
-    def _get_executable_from_desktop(self, desktop_name):
-        """
-        Extract the executable command from a desktop file.
-        """
-        desktop_path = self.find_desktop_file(desktop_name)
-        if not desktop_path:
-            return None
+        # Launch using the same method as EasyCommand
+        self.run_command(command)
 
-        try:
-            config = configparser.ConfigParser()
-            config.read(desktop_path)
+    def run_command(self, command):
+        if command is None:
+            return
 
-            if 'Desktop Entry' in config and 'Exec' in config['Desktop Entry']:
-                exec_cmd = config['Desktop Entry']['Exec'].split()[0]  # Take first part before arguments
-                # Remove field codes like %U, %F, etc.
-                exec_cmd = exec_cmd.split('%')[0].strip()
-                return exec_cmd
-        except Exception as e:
-            log.debug(f"Error reading Exec from {desktop_name}: {e}")
+        if is_in_flatpak():
+            command = "flatpak-spawn --host " + command
 
-        return None
+        p = multiprocessing.Process(target=subprocess.Popen, args=[command], kwargs={"shell": True, "start_new_session": True, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "cwd": os.path.expanduser("~")})
+        p.start()
+        return ""
 
-    def launch_app(self, app_command, desktop_name):
-        """
-        Launch an application using its executable command.
-        app_command can be either a desktop file name or an executable path.
-        """
-        # Try multiple launch methods in order of preference
-        launch_methods = []
-
-        # If we have a direct executable, try running it directly first
-        if app_command and not app_command.endswith('.desktop'):
-            launch_methods.append((app_command, []))
-
-        # Then try desktop file launchers
-        launch_methods.extend([
-            ('gtk-launch', [desktop_name]),
-            ('gio', ['launch', desktop_name]),
-            ('xdg-open', [f"applications://{desktop_name}"]),
-        ])
-
-        # In Flatpak, also try host commands
-        if os.getenv('FLATPAK_ID'):
-            if app_command and not app_command.endswith('.desktop'):
-                launch_methods.append((['flatpak-spawn', '--host', app_command], []))
-
-            launch_methods.extend([
-                (['flatpak-spawn', '--host', 'gtk-launch'], [desktop_name]),
-                (['flatpak-spawn', '--host', 'gio', 'launch'], [desktop_name]),
-                (['flatpak-spawn', '--host', 'xdg-open'], [f"applications://{desktop_name}"]),
-            ])
-
-        last_error = None
-        for method_name, args in launch_methods:
-            try:
-                if isinstance(method_name, list):
-                    # flatpak-spawn case
-                    cmd = method_name + args
-                else:
-                    # regular command case
-                    cmd = [method_name] + args
-
-                subprocess.run(cmd, check=True, capture_output=True)
-                log.info(f"Successfully launched {desktop_name} using {method_name}")
-                return
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                last_error = e
-                log.debug(f"Failed to launch {desktop_name} with {method_name}: {e}")
-                continue
-            except Exception as e:
-                last_error = e
-                log.debug(f"Unexpected error launching {desktop_name} with {method_name}: {e}")
-                continue
-
-        # If all methods failed, log the final error
-        if last_error:
-            log.error(f"All launch methods failed for {desktop_name}. Last error: {last_error}")
-        else:
-            log.error(f"No suitable launch method found for {desktop_name}")
 
     def get_favorites(self):
         if os.getenv('FLATPAK_ID'):
