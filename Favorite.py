@@ -242,20 +242,63 @@ class Favorite(ActionBase):
             if not dconf_path.exists():
                 return None
 
-            # The dconf database is binary and complex to parse.
-            # For now, we'll try a simple approach using grep if available
+            # The dconf database is binary. We'll try to extract favorites data using
+            # a combination of binary search and text extraction
+            with open(dconf_path, 'rb') as f:
+                data = f.read()
+
+            # Look for the favorites key in the binary data
+            # The key '/org/gnome/shell/favorite-apps' might appear as text
+            key_bytes = b'/org/gnome/shell/favorite-apps'
+            key_pos = data.find(key_bytes)
+
+            if key_pos == -1:
+                # Try alternative key patterns
+                alt_keys = [
+                    b'favorite-apps',
+                    b'/org/gnome/shell/favorite',
+                    b'favorite-apps\x00'
+                ]
+                for alt_key in alt_keys:
+                    key_pos = data.find(alt_key)
+                    if key_pos != -1:
+                        break
+
+            if key_pos == -1:
+                return None
+
+            # Extract a reasonable chunk of data after the key
+            # This is heuristic - the actual format is complex
+            start_pos = max(0, key_pos - 100)  # Look a bit before
+            end_pos = min(len(data), key_pos + 500)  # Look quite a bit after
+
+            chunk = data[start_pos:end_pos]
+
+            # Try to find array-like patterns in the binary data
+            # Look for patterns like ['app1.desktop', 'app2.desktop']
+            import re
+
+            # Convert chunk to string, ignoring decode errors
             try:
-                result = subprocess.run(['grep', '-a', 'favorite-apps', str(dconf_path)],
-                                      capture_output=True, text=True, check=True)
-                # This is a very basic parsing attempt - in practice, the dconf format
-                # is quite complex and would require a proper parser
-                output = result.stdout.strip()
-                if output:
-                    log.debug(f"Found potential favorites data: {output}")
-                    # This would need more sophisticated parsing to extract the actual list
-                    # For now, return None to indicate this method needs more work
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
+                chunk_str = chunk.decode('utf-8', errors='ignore')
+            except UnicodeDecodeError:
+                chunk_str = chunk.decode('latin-1', errors='ignore')
+
+            # Look for desktop file patterns
+            desktop_pattern = r'([a-zA-Z0-9_-]+\.desktop)'
+            matches = re.findall(desktop_pattern, chunk_str)
+
+            if matches:
+                # Remove duplicates while preserving order
+                seen = set()
+                unique_matches = []
+                for match in matches:
+                    if match not in seen:
+                        seen.add(match)
+                        unique_matches.append(match)
+
+                log.debug(f"Extracted favorites from dconf database: {unique_matches}")
+                return unique_matches
 
             return None
 
