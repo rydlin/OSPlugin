@@ -28,6 +28,7 @@ from src.backend.PageManagement.Page import Page
 from .Hotkey import Hotkey
 from .EasyHotkey import EasyHotkey
 from .Launch import Launch
+from .Favorite import Favorite
 from .actions.RunCommand.RunCommand import RunCommand
 from .actions.EasyCommand.EasyCommand import EasyCommand
 from .actions.OpenInBrowser.OpenInBrowser import OpenInBrowser
@@ -144,6 +145,19 @@ class OSPlugin(PluginBase):
         )
         # Deactived because of problems in flatpak and app gathering
         # self.add_action_holder(self.launch_holder)
+
+        self.favorite_holder = ActionHolder(
+            plugin_base=self,
+            action_base=Favorite,
+            action_id_suffix="Favorite",
+            action_name=self.lm.get("actions.favorite.name"),
+            action_support={
+                Input.Key: ActionInputSupport.SUPPORTED,
+                Input.Dial: ActionInputSupport.SUPPORTED,
+                Input.Touchscreen: ActionInputSupport.UNTESTED
+            }
+        )
+        self.add_action_holder(self.favorite_holder)
 
         self.cpu_graph_holder = ActionHolder(
             plugin_base=self,
