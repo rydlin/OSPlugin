@@ -69,15 +69,48 @@ class Favorite(ActionBase):
         self.launch_app(self.favorites[favorite - 1])
 
     def launch_app(self, desktop_name):
-        try:
-            subprocess.run(['gtk-launch', desktop_name], check=True)
-            log.info(f"Launched {desktop_name}")
-        except subprocess.CalledProcessError as e:
-            log.error(f"Failed to launch {desktop_name}: {e}")
-        except FileNotFoundError:
-            log.error(f"gtk-launch command not found. Cannot launch {desktop_name}")
-        except Exception as e:
-            log.error(f"Unexpected error launching {desktop_name}: {e}")
+        # Try multiple launch methods in order of preference
+        launch_methods = [
+            ('gtk-launch', [desktop_name]),
+            ('gio', ['launch', desktop_name]),
+            ('xdg-open', [f"applications://{desktop_name}"]),
+        ]
+
+        # In Flatpak, also try host commands
+        if os.getenv('FLATPAK_ID'):
+            launch_methods.extend([
+                (['flatpak-spawn', '--host', 'gtk-launch'], [desktop_name]),
+                (['flatpak-spawn', '--host', 'gio', 'launch'], [desktop_name]),
+                (['flatpak-spawn', '--host', 'xdg-open'], [f"applications://{desktop_name}"]),
+            ])
+
+        last_error = None
+        for method_name, args in launch_methods:
+            try:
+                if isinstance(method_name, list):
+                    # flatpak-spawn case
+                    cmd = method_name + args
+                else:
+                    # regular command case
+                    cmd = [method_name] + args
+
+                subprocess.run(cmd, check=True, capture_output=True)
+                log.info(f"Successfully launched {desktop_name} using {method_name}")
+                return
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                last_error = e
+                log.debug(f"Failed to launch {desktop_name} with {method_name}: {e}")
+                continue
+            except Exception as e:
+                last_error = e
+                log.debug(f"Unexpected error launching {desktop_name} with {method_name}: {e}")
+                continue
+
+        # If all methods failed, log the final error
+        if last_error:
+            log.error(f"All launch methods failed for {desktop_name}. Last error: {last_error}")
+        else:
+            log.error(f"No suitable launch method found for {desktop_name}")
 
     def get_favorites(self):
         if os.getenv('FLATPAK_ID'):
