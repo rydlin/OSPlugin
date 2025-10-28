@@ -38,6 +38,11 @@ class Favorite(ActionBase):
         super().__init__(*args, **kwargs)
 
         self.has_configuration = True
+
+        # Launch the backend process
+        backend_path = os.path.join(self.plugin_base.PATH, "actions", "favorite", "backend", "backend.py")
+        self.launch_backend(backend_path=backend_path, open_in_terminal=False)
+
         try:
             self.favorites = self.get_favorites()
         except Exception as e:
@@ -77,19 +82,23 @@ class Favorite(ActionBase):
         favorite_index = int(favorite) - 1
         desktop_name = self.favorites[favorite_index]
 
-        # Try multiple approaches to get the command
-        command = self._get_command_from_desktop(desktop_name)
-        if not command:
-            # Fallback: try GNOME App Registry
-            command = self._get_command_from_app_registry(desktop_name)
-        if not command:
-            # Last fallback: extract command from desktop filename
-            command = self._extract_command_from_filename(desktop_name)
-
-        if command:
-            self.run_command(command)
-        else:
-            log.error(f"Could not determine command for {desktop_name}")
+        # Get command from backend
+        try:
+            command = self.backend.get_command_for_desktop(desktop_name)
+            if command:
+                # If command contains spaces or special chars, it might be a full command
+                # Otherwise, treat it as executable name
+                if ' ' in command:
+                    # Full command like "gapplication launch org.gnome.Evolution.desktop"
+                    self.run_command(command)
+                else:
+                    # Just executable name like "evolution"
+                    self.run_command(command)
+            else:
+                log.error(f"Could not determine command for {desktop_name}")
+        except Exception as e:
+            log.error(f"Backend communication failed: {e}")
+            self.show_error()
 
     def run_command(self, command):
         if command is None or command.strip() == "":
@@ -273,235 +282,55 @@ class Favorite(ActionBase):
         # Fallback: return the icon name
         return icon
 
-    def _get_command_from_desktop(self, desktop_name):
-        """
-        Extract the command to run from a desktop file.
-        In Flatpak, use flatpak-spawn to read host files.
-        """
-        if is_in_flatpak():
-            # In Flatpak, use flatpak-spawn to read the desktop file from host
-            try:
-                # Try multiple possible locations for the desktop file
-                possible_paths = [
-                    f'/usr/share/applications/{desktop_name}',
-                    f'/usr/local/share/applications/{desktop_name}',
-                    f'/var/lib/flatpak/exports/share/applications/{desktop_name}',
-                    os.path.expanduser(f'~/.local/share/flatpak/exports/share/applications/{desktop_name}')
-                ]
-
-                content = None
-                desktop_path = None
-
-                # Try to read from each possible location
-                for path in possible_paths:
-                    try:
-                        log.debug(f"Trying to read desktop file from host path: {path}")
-                        result = subprocess.run(['flatpak-spawn', '--host', 'cat', path],
-                                              capture_output=True, text=True, check=True)
-                        content = result.stdout
-                        desktop_path = path
-                        log.debug(f"Successfully read desktop file from host: {path}")
-                        break
-                    except subprocess.CalledProcessError as e:
-                        log.debug(f"Failed to read from {path}: {e}")
-                        continue
-
-                if not content:
-                    log.debug(f"Desktop file not found on host in any location: {desktop_name}")
-                    return None
-
-                # Parse the content to find Exec line
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith('Exec='):
-                        exec_cmd = line[5:].strip()  # Remove 'Exec=' prefix
-                        # Remove field codes like %U, %F, etc. and take first command
-                        exec_cmd = exec_cmd.split('%')[0].strip()
-                        # If there are arguments, take just the command
-                        command = exec_cmd.split()[0]
-                        log.debug(f"Found command '{command}' for {desktop_name} from host {desktop_path}")
-                        return command
-
-                log.debug(f"No Exec= line found in host file {desktop_path}")
-                return None
-
-            except Exception as e:
-                log.debug(f"Error reading desktop file from host: {e}")
-                return None
-        else:
-            # Non-Flatpak: use direct file access
-            desktop_path = self.find_desktop_file(desktop_name)
-            if not desktop_path:
-                log.debug(f"Desktop file not found: {desktop_name}")
-                return None
-
-            try:
-                # Read the file manually to find the first Exec= line
-                with open(desktop_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('Exec='):
-                            exec_cmd = line[5:].strip()  # Remove 'Exec=' prefix
-                            # Remove field codes like %U, %F, etc. and take first command
-                            exec_cmd = exec_cmd.split('%')[0].strip()
-                            # If there are arguments, take just the command
-                            command = exec_cmd.split()[0]
-                            log.debug(f"Found command '{command}' for {desktop_name} from {desktop_path}")
-                            return command
-
-                log.debug(f"No Exec= line found in {desktop_path}")
-                return None
-
-            except Exception as e:
-                log.debug(f"Error reading Exec from {desktop_name}: {e}")
-                return None
-
-    def _read_dconf_database(self):
-        """
-        Attempt to read GNOME favorites directly from the dconf database file.
-        This is a fallback method for when dconf/gsettings commands are not available.
-        """
-        try:
-            import pathlib
-            dconf_path = pathlib.Path.home() / '.config' / 'dconf' / 'user'
-
-            if not dconf_path.exists():
-                return None
-
-            # The dconf database is binary. We'll try to extract favorites data using
-            # a combination of binary search and text extraction
-            with open(dconf_path, 'rb') as f:
-                data = f.read()
-
-            # Look for the favorites key in the binary data
-            # The key '/org/gnome/shell/favorite-apps' might appear as text
-            key_bytes = b'/org/gnome/shell/favorite-apps'
-            key_pos = data.find(key_bytes)
-
-            if key_pos == -1:
-                # Try alternative key patterns
-                alt_keys = [
-                    b'favorite-apps',
-                    b'/org/gnome/shell/favorite',
-                    b'favorite-apps\x00'
-                ]
-                for alt_key in alt_keys:
-                    key_pos = data.find(alt_key)
-                    if key_pos != -1:
-                        break
-
-            if key_pos == -1:
-                return None
-
-            # Extract a reasonable chunk of data after the key
-            # This is heuristic - the actual format is complex
-            start_pos = max(0, key_pos - 100)  # Look a bit before
-            end_pos = min(len(data), key_pos + 500)  # Look quite a bit after
-
-            chunk = data[start_pos:end_pos]
-
-            # Try to find array-like patterns in the binary data
-            # Look for patterns like ['app1.desktop', 'app2.desktop']
-            import re
-
-            # Convert chunk to string, ignoring decode errors
-            try:
-                chunk_str = chunk.decode('utf-8', errors='ignore')
-            except UnicodeDecodeError:
-                chunk_str = chunk.decode('latin-1', errors='ignore')
-
-            # Look for desktop file patterns (including reverse domain notation)
-            desktop_pattern = r'([a-zA-Z0-9_.-]+\.desktop)'
-            matches = re.findall(desktop_pattern, chunk_str)
-
-            if matches:
-                # Remove duplicates while preserving order
-                seen = set()
-                unique_matches = []
-                for match in matches:
-                    if match not in seen:
-                        seen.add(match)
-                        unique_matches.append(match)
-
-                log.debug(f"Extracted favorites from dconf database: {unique_matches}")
-                return unique_matches
-
-            return None
-
-        except Exception as e:
-            log.debug(f"Error reading dconf database: {e}")
-            return None
-
-    def _get_favorites_via_dbus(self):
-        """
-        Attempt to get favorites via D-Bus if available.
-        """
-        if not HAS_DBUS:
-            return None
-
-        try:
-            # Try to connect to GNOME Shell's D-Bus interface
-            bus = dbus.SessionBus()
-            proxy = bus.get_object('org.gnome.Shell', '/org/gnome/Shell')
-            interface = dbus.Interface(proxy, 'org.gnome.Shell')
-
-            # Try different method names that might exist
-            for method_name in ['GetFavoriteApps', 'getFavoriteApps', 'favoriteApps']:
-                try:
-                    favorites = interface.get_dbus_method(method_name)()
-                    if favorites:
-                        return list(favorites)
-                except dbus.exceptions.DBusException:
-                    continue
-
-            return None
-
-        except Exception as e:
-            log.debug(f"D-Bus access failed: {e}")
-            return None
-
-    def _get_command_from_app_registry(self, desktop_name):
-        """
-        Get the executable command using GNOME's Gio App Registry.
-        This is more reliable than parsing filenames.
-        """
-        try:
-            app_info = Gio.DesktopAppInfo.new(desktop_name)
-            if app_info:
-                executable = app_info.get_executable()
-                if executable:
-                    log.debug(f"Found command '{executable}' for {desktop_name} via App Registry")
-                    return executable
-        except Exception as e:
-            log.debug(f"App Registry lookup failed for {desktop_name}: {e}")
-
-        return None
 
     def _extract_command_from_filename(self, desktop_name):
         """
-        Extract command from desktop filename as a last resort fallback.
-        Handles common patterns like org.gnome.Evolution.desktop -> evolution
+        Extract command from desktop filename as a fallback.
+        Uses a mapping of known applications for reliability.
         """
         if not desktop_name or not desktop_name.endswith('.desktop'):
             return None
 
-        # Remove .desktop extension
-        name = desktop_name[:-8]  # Remove '.desktop'
+        # Known mappings for common applications
+        known_apps = {
+            'org.gnome.Evolution.desktop': 'evolution',
+            'org.gnome.Nautilus.desktop': 'nautilus',
+            'org.gnome.Console.desktop': 'kgx',
+            'org.gnome.TextEditor.desktop': 'gedit',
+            'org.gnome.Calculator.desktop': 'gnome-calculator',
+            'org.gnome.Calendar.desktop': 'gnome-calendar',
+            'org.gnome.Software.desktop': 'gnome-software',
+            'org.gnome.Settings.desktop': 'gnome-control-center',
+            'firefox.desktop': 'firefox',
+            'chromium.desktop': 'chromium',
+            'google-chrome.desktop': 'google-chrome-stable',
+            'code.desktop': 'code',
+            'org.freecad.FreeCAD.desktop': 'freecad',
+            'discord.desktop': 'discord',
+            'steam.desktop': 'steam',
+            'spotify.desktop': 'spotify',
+            'vlc.desktop': 'vlc',
+            'org.gnome.Terminal.desktop': 'gnome-terminal',
+            'org.kde.dolphin.desktop': 'dolphin',
+            'org.kde.kate.desktop': 'kate',
+        }
 
-        # Handle reverse domain notation (org.gnome.Evolution -> evolution)
+        if desktop_name in known_apps:
+            command = known_apps[desktop_name]
+            log.debug(f"Found known command '{command}' for '{desktop_name}'")
+            return command
+
+        # Fallback: simple filename extraction
+        name = desktop_name[:-8]  # Remove '.desktop'
         if '.' in name:
             parts = name.split('.')
-            # For reverse domain, take the last part and convert to lowercase
             if len(parts) >= 2:
-                last_part = parts[-1]
-                # Simple lowercase conversion - most app names are already properly cased
-                command = last_part.lower()
+                command = parts[-1].lower()
                 log.debug(f"Extracted command '{command}' from filename '{desktop_name}'")
                 return command
 
-        # For simple names like 'firefox.desktop' -> 'firefox'
         command = name.lower()
-        log.debug(f"Extracted simple command '{command}' from filename '{desktop_name}'")
+        log.debug(f"Simple command '{command}' from filename '{desktop_name}'")
         return command
 
     
