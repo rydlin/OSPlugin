@@ -161,25 +161,36 @@ class Favorite(ActionBase):
     def find_desktop_file(self,desktop_name):
         """
         Find the full path of a .desktop file by searching standard directories.
-        
+
         Args:
             desktop_name (str): Name of the .desktop file (e.g., 'firefox.desktop')
-            
+
         Returns:
             str: Full path to the .desktop file, or None if not found
         """
         search_paths = [
             '/usr/share/applications',
             '/usr/local/share/applications',
-            os.path.expanduser('~/.local/share/applications')
+            os.path.expanduser('~/.local/share/applications'),
+            '/var/lib/flatpak/exports/share/applications',  # Flatpak host exports
+            os.path.expanduser('~/.local/share/flatpak/exports/share/applications')  # User Flatpak exports
         ]
-        
+
+        log.debug(f"Searching for desktop file: {desktop_name}")
         for path in search_paths:
             full_path = os.path.join(path, desktop_name)
-            if os.path.isfile(full_path):
+            log.debug(f"Checking path: {full_path}")
+            try:
+                # Try to open the file to ensure it's readable
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    f.read(1)  # Just read one character to test accessibility
+                log.debug(f"Found desktop file: {full_path}")
                 return full_path
-        
-        log.error(f"Error: {desktop_name} not found in standard directories")
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                log.debug(f"Path not accessible: {full_path} - {e}")
+                continue
+
+        log.warning(f"Desktop file {desktop_name} not found in any search path")
         return None
 
     def get_app_name(self, desktop_name):
@@ -264,21 +275,25 @@ class Favorite(ActionBase):
             return None
 
         try:
-            config = configparser.ConfigParser()
-            config.read(desktop_path)
+            # Read the file manually to find the first Exec= line
+            with open(desktop_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('Exec='):
+                        exec_cmd = line[5:].strip()  # Remove 'Exec=' prefix
+                        # Remove field codes like %U, %F, etc. and take first command
+                        exec_cmd = exec_cmd.split('%')[0].strip()
+                        # If there are arguments, take just the command
+                        command = exec_cmd.split()[0]
+                        log.debug(f"Found command '{command}' for {desktop_name} from {desktop_path}")
+                        return command
 
-            if 'Desktop Entry' in config and 'Exec' in config['Desktop Entry']:
-                exec_cmd = config['Desktop Entry']['Exec']
-                # Remove field codes like %U, %F, etc. and take first command
-                exec_cmd = exec_cmd.split('%')[0].strip()
-                # If there are arguments, take just the command
-                command = exec_cmd.split()[0]
-                log.debug(f"Found command '{command}' for {desktop_name}")
-                return command
+            log.debug(f"No Exec= line found in {desktop_path}")
+            return None
+
         except Exception as e:
             log.debug(f"Error reading Exec from {desktop_name}: {e}")
-
-        return None
+            return None
 
     def _read_dconf_database(self):
         """
