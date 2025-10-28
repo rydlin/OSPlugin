@@ -7,13 +7,15 @@ from loguru import logger as log
 class Backend(BackendBase):
     def __init__(self):
         super().__init__()
+        log.info("=== GNOME Favorite Backend Started ===")
+        log.info(f"Running in environment: {'Flatpak' if os.getenv('FLATPAK_ID') else 'Native'}")
         log.info("GNOME Favorite backend initialized - using host system tools only")
 
 
     def get_command_for_desktop(self, desktop_name):
         """Get the executable command for a desktop file using GNOME tools on host."""
 
-        log.debug(f"Resolving command for desktop file: {desktop_name}")
+        log.info(f"=== Resolving command for desktop file: {desktop_name} ===")
 
         # Since backend runs in Flatpak, use flatpak-spawn --host for all host commands
 
