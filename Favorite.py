@@ -268,16 +268,27 @@ class Favorite(ActionBase):
     def _get_command_from_desktop(self, desktop_name):
         """
         Extract the command to run from a desktop file.
+        In Flatpak, use flatpak-spawn to read host files.
         """
-        desktop_path = self.find_desktop_file(desktop_name)
-        if not desktop_path:
-            log.debug(f"Desktop file not found: {desktop_name}")
-            return None
+        if is_in_flatpak():
+            # In Flatpak, use flatpak-spawn to read the desktop file from host
+            try:
+                # Find the desktop file on host using flatpak-spawn
+                result = subprocess.run(['flatpak-spawn', '--host', 'find', '/usr/share/applications', '/usr/local/share/applications',
+                                       '-name', desktop_name, '-type', 'f', '-print', '-quit'],
+                                      capture_output=True, text=True, check=True)
+                desktop_path = result.stdout.strip()
+                if not desktop_path:
+                    log.debug(f"Desktop file not found on host: {desktop_name}")
+                    return None
 
-        try:
-            # Read the file manually to find the first Exec= line
-            with open(desktop_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
+                # Read the file content using flatpak-spawn
+                result = subprocess.run(['flatpak-spawn', '--host', 'cat', desktop_path],
+                                      capture_output=True, text=True, check=True)
+                content = result.stdout
+
+                # Parse the content to find Exec line
+                for line in content.splitlines():
                     line = line.strip()
                     if line.startswith('Exec='):
                         exec_cmd = line[5:].strip()  # Remove 'Exec=' prefix
@@ -285,15 +296,42 @@ class Favorite(ActionBase):
                         exec_cmd = exec_cmd.split('%')[0].strip()
                         # If there are arguments, take just the command
                         command = exec_cmd.split()[0]
-                        log.debug(f"Found command '{command}' for {desktop_name} from {desktop_path}")
+                        log.debug(f"Found command '{command}' for {desktop_name} from host {desktop_path}")
                         return command
 
-            log.debug(f"No Exec= line found in {desktop_path}")
-            return None
+                log.debug(f"No Exec= line found in host file {desktop_path}")
+                return None
 
-        except Exception as e:
-            log.debug(f"Error reading Exec from {desktop_name}: {e}")
-            return None
+            except subprocess.CalledProcessError as e:
+                log.debug(f"Error reading desktop file from host: {e}")
+                return None
+        else:
+            # Non-Flatpak: use direct file access
+            desktop_path = self.find_desktop_file(desktop_name)
+            if not desktop_path:
+                log.debug(f"Desktop file not found: {desktop_name}")
+                return None
+
+            try:
+                # Read the file manually to find the first Exec= line
+                with open(desktop_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('Exec='):
+                            exec_cmd = line[5:].strip()  # Remove 'Exec=' prefix
+                            # Remove field codes like %U, %F, etc. and take first command
+                            exec_cmd = exec_cmd.split('%')[0].strip()
+                            # If there are arguments, take just the command
+                            command = exec_cmd.split()[0]
+                            log.debug(f"Found command '{command}' for {desktop_name} from {desktop_path}")
+                            return command
+
+                log.debug(f"No Exec= line found in {desktop_path}")
+                return None
+
+            except Exception as e:
+                log.debug(f"Error reading Exec from {desktop_name}: {e}")
+                return None
 
     def _read_dconf_database(self):
         """
