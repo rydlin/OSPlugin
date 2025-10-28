@@ -82,6 +82,35 @@ class Backend(BackendBase):
             log.debug(f"Using cached command {command} for {desktop_name}")
             return command
 
+        # Method 4: Known application mappings as final fallback
+        known_apps = {
+            'org.gnome.Evolution.desktop': 'evolution',
+            'org.gnome.Nautilus.desktop': 'nautilus',
+            'org.gnome.Console.desktop': 'kgx',
+            'org.gnome.TextEditor.desktop': 'gedit',
+            'org.gnome.Calculator.desktop': 'gnome-calculator',
+            'org.gnome.Calendar.desktop': 'gnome-calendar',
+            'org.gnome.Software.desktop': 'gnome-software',
+            'org.gnome.Settings.desktop': 'gnome-control-center',
+            'firefox.desktop': 'firefox',
+            'chromium.desktop': 'chromium',
+            'google-chrome.desktop': 'google-chrome-stable',
+            'code.desktop': 'code',
+            'org.freecad.FreeCAD.desktop': 'freecad',
+            'discord.desktop': 'discord',
+            'steam.desktop': 'steam',
+            'spotify.desktop': 'spotify',
+            'vlc.desktop': 'vlc',
+            'org.gnome.Terminal.desktop': 'gnome-terminal',
+            'org.kde.dolphin.desktop': 'dolphin',
+            'org.kde.kate.desktop': 'kate',
+        }
+
+        if desktop_name in known_apps:
+            command = known_apps[desktop_name]
+            log.debug(f"Using known mapping {command} for {desktop_name}")
+            return command
+
         # Method 4: gtk-launch as final GNOME-native fallback
         try:
             result = subprocess.run(['gtk-launch', '--help'],

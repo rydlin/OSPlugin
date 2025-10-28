@@ -82,20 +82,15 @@ class Favorite(ActionBase):
         favorite_index = int(favorite) - 1
         desktop_name = self.favorites[favorite_index]
 
-        # Get command from backend
+        # Get command from backend only (no fallbacks since backend should handle everything)
         try:
             command = self.backend.get_command_for_desktop(desktop_name)
             if command:
-                # If command contains spaces or special chars, it might be a full command
-                # Otherwise, treat it as executable name
-                if ' ' in command:
-                    # Full command like "gapplication launch org.gnome.Evolution.desktop"
-                    self.run_command(command)
-                else:
-                    # Just executable name like "evolution"
-                    self.run_command(command)
+                log.info(f"Launching {desktop_name} with backend command: {command}")
+                self.run_command(command)
             else:
-                log.error(f"Could not determine command for {desktop_name}")
+                log.error(f"Backend could not determine command for {desktop_name}")
+                self.show_error()
         except Exception as e:
             log.error(f"Backend communication failed: {e}")
             self.show_error()
@@ -152,6 +147,7 @@ class Favorite(ActionBase):
 
                         log.warning("All methods to access GNOME favorites failed in Flatpak.")
                         log.info("Consider configuring favorite apps manually in the action settings.")
+                        # Return empty list for now - backend will handle command resolution
                         return []
 
         # Non-Flatpak: use gsettings
