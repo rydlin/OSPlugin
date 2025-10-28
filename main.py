@@ -28,7 +28,7 @@ from src.backend.PageManagement.Page import Page
 from .Hotkey import Hotkey
 from .EasyHotkey import EasyHotkey
 from .Launch import Launch
-from .Favorite import Favorite
+from .actions.favorite.favorite import Favorite
 from .actions.RunCommand.RunCommand import RunCommand
 from .actions.EasyCommand.EasyCommand import EasyCommand
 from .actions.OpenInBrowser.OpenInBrowser import OpenInBrowser
