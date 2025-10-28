@@ -76,8 +76,12 @@ class Favorite(ActionBase):
         favorite_index = int(favorite) - 1
         desktop_name = self.favorites[favorite_index]
 
-        # Get the actual command from the desktop file
+        # Try multiple approaches to get the command
         command = self._get_command_from_desktop(desktop_name)
+        if not command:
+            # Fallback: try to extract command from desktop filename
+            command = self._extract_command_from_filename(desktop_name)
+
         if command:
             self.run_command(command)
         else:
@@ -287,13 +291,15 @@ class Favorite(ActionBase):
                 # Try to read from each possible location
                 for path in possible_paths:
                     try:
+                        log.debug(f"Trying to read desktop file from host path: {path}")
                         result = subprocess.run(['flatpak-spawn', '--host', 'cat', path],
                                               capture_output=True, text=True, check=True)
                         content = result.stdout
                         desktop_path = path
                         log.debug(f"Successfully read desktop file from host: {path}")
                         break
-                    except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError as e:
+                        log.debug(f"Failed to read from {path}: {e}")
                         continue
 
                 if not content:
@@ -449,5 +455,36 @@ class Favorite(ActionBase):
         except Exception as e:
             log.debug(f"D-Bus access failed: {e}")
             return None
+
+    def _extract_command_from_filename(self, desktop_name):
+        """
+        Extract command from desktop filename as a fallback.
+        Handles common patterns like org.gnome.Evolution.desktop -> evolution
+        """
+        if not desktop_name or not desktop_name.endswith('.desktop'):
+            return None
+
+        # Remove .desktop extension
+        name = desktop_name[:-8]  # Remove '.desktop'
+
+        # Handle reverse domain notation (org.gnome.Evolution -> evolution)
+        if '.' in name:
+            parts = name.split('.')
+            # For reverse domain, take the last meaningful part
+            # org.gnome.Evolution -> Evolution -> evolution
+            if len(parts) >= 2:
+                last_part = parts[-1]
+                # Convert CamelCase to lowercase
+                import re
+                # Split on uppercase letters and join with hyphens, then lowercase
+                command = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', last_part).lower()
+                command = re.sub(r'([A-Z])([A-Z][a-z])', r'\1-\2', command).lower()
+                log.debug(f"Extracted command '{command}' from filename '{desktop_name}'")
+                return command
+
+        # For simple names like 'firefox.desktop' -> 'firefox'
+        command = name.lower()
+        log.debug(f"Extracted simple command '{command}' from filename '{desktop_name}'")
+        return command
 
     
