@@ -39,8 +39,23 @@ class Favorite(ActionBase):
 
         self.has_configuration = True
 
-        # Launch the backend process
-        backend_path = os.path.join(self.plugin_base.PATH, "actions", "favorite", "backend", "backend.py")
+        # Launch the backend process - copy to user directory for Flatpak compatibility
+        backend_source = os.path.join(self.plugin_base.PATH, "actions", "favorite", "backend", "backend.py")
+        backend_dest_dir = os.path.expanduser("~/.var/app/com.core447.StreamController/data/backends")
+        os.makedirs(backend_dest_dir, exist_ok=True)
+        backend_path = os.path.join(backend_dest_dir, "favorite_backend.py")
+
+        # Copy backend file to user directory
+        try:
+            with open(backend_source, 'r') as src:
+                with open(backend_path, 'w') as dst:
+                    dst.write(src.read())
+            log.debug(f"Copied backend to user directory: {backend_path}")
+        except Exception as e:
+            log.error(f"Failed to copy backend to user directory: {e}")
+            # Fall back to original path
+            backend_path = backend_source
+
         self.launch_backend(backend_path=backend_path, open_in_terminal=False)
 
         try:
@@ -55,6 +70,9 @@ class Favorite(ActionBase):
         self.set_media(media_path=os.path.join(self.plugin_base.PATH, "assets", "favorites.png"), size=0.8)
 
     def get_config_rows(self) -> list:
+        rows = []
+
+        # Favorite number selector
         self.favorite_row = Adw.SpinRow().new_with_range(min=1, max=10, step=1)
         self.favorite_row.set_title(self.plugin_base.lm.get("favorite.entry.title"))
         self.favorite_row.set_subtitle(self.plugin_base.lm.get("favorite.entry.subtitle"))
@@ -62,27 +80,58 @@ class Favorite(ActionBase):
         # Load from config
         settings = self.get_settings()
         self.favorite_row.set_value(settings.get("favorite", 1))
-
         self.favorite_row.connect("changed", self.on_favorite_change)
+        rows.append(self.favorite_row)
 
-        return [self.favorite_row]
+        # Manual desktop file entry (for Flatpak or when auto-detection fails)
+        self.desktop_entry = Adw.EntryRow()
+        self.desktop_entry.set_title("Desktop File Name")
+        self.desktop_entry.set_subtitle("Enter desktop file name (e.g., firefox.desktop)")
+
+        current_desktop = settings.get("desktop_file", "")
+        self.desktop_entry.set_text(current_desktop)
+        self.desktop_entry.connect("changed", self.on_desktop_change)
+        rows.append(self.desktop_entry)
+
+        return rows
     
     def on_favorite_change(self, *args):
         settings = self.get_settings()
         settings["favorite"] = round(self.favorite_row.get_value(), 1)
         self.set_settings(settings)
 
+    def on_desktop_change(self, *args):
+        settings = self.get_settings()
+        settings["desktop_file"] = self.desktop_entry.get_text().strip()
+        self.set_settings(settings)
+
     def on_key_down(self):
-        favorite = self.get_settings().get("favorite", 1)
-        if not self.favorites:
-            log.warning("No favorite apps configured.")
+        settings = self.get_settings()
+        favorite = settings.get("favorite", 1)
+        desktop_name = settings.get("desktop_file", "").strip()
+
+        # If no manual desktop file is configured and no auto-detected favorites
+        if not desktop_name and not self.favorites:
+            log.warning("No desktop file configured and no favorites auto-detected.")
+            log.info("Please configure a desktop file name in the action settings.")
             return
-        if favorite < 1 or favorite > len(self.favorites):
-            log.warning(f"Invalid favorite index: {favorite}. Must be between 1 and {len(self.favorites)}.")
+
+        # Use manual desktop file if configured, otherwise use auto-detected favorites
+        if desktop_name:
+            log.debug(f"Using manually configured desktop file: {desktop_name}")
+        elif self.favorites:
+            if favorite < 1 or favorite > len(self.favorites):
+                log.warning(f"Invalid favorite index: {favorite}. Must be between 1 and {len(self.favorites)}.")
+                return
+            # Ensure favorite is an integer for list indexing
+            favorite_index = int(favorite) - 1
+            desktop_name = self.favorites[favorite_index]
+            log.debug(f"Using auto-detected favorite #{favorite}: {desktop_name}")
+        else:
+            log.error("No desktop file available for launching")
             return
-        # Ensure favorite is an integer for list indexing
-        favorite_index = int(favorite) - 1
-        desktop_name = self.favorites[favorite_index]
+
+        log.debug(f"Attempting to launch: {desktop_name}")
 
         # Get command from backend only (no fallbacks since backend should handle everything)
         try:
@@ -110,50 +159,31 @@ class Favorite(ActionBase):
             log.debug(f"Started process for command: {command}")
         except Exception as e:
             log.error(f"Failed to run command '{command}': {e}")
+            self.show_error()
 
         return ""
 
 
     def get_favorites(self):
+        """Get GNOME favorites list. In Flatpak, this will be empty since we can't access host settings."""
+        log.debug("Attempting to get GNOME favorites list")
+
         if os.getenv('FLATPAK_ID'):
-            # In Flatpak, try multiple approaches to access favorites
-            try:
-                # First try: dconf command (if available)
-                result = subprocess.run(['dconf', 'read', '/org/gnome/shell/favorite-apps'],
-                                      capture_output=True, text=True, check=True)
-                favorites_str = result.stdout.strip()
-                return ast.literal_eval(favorites_str) if favorites_str else []
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                # Second try: Use flatpak-spawn to run dconf on host
-                try:
-                    result = subprocess.run(['flatpak-spawn', '--host', 'dconf', 'read', '/org/gnome/shell/favorite-apps'],
-                                          capture_output=True, text=True, check=True)
-                    favorites_str = result.stdout.strip()
-                    return ast.literal_eval(favorites_str) if favorites_str else []
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    # Third try: Use flatpak-spawn to run gsettings on host
-                    try:
-                        result = subprocess.run(['flatpak-spawn', '--host', 'gsettings', 'get', 'org.gnome.shell', 'favorite-apps'],
-                                              capture_output=True, text=True, check=True)
-                        return ast.literal_eval(result.stdout.strip())
-                    except (subprocess.CalledProcessError, FileNotFoundError):
-                        # Fourth try: Use backend for GNOME tools
-                        try:
-                            # The backend should handle GNOME tools better
-                            log.debug("All direct access methods failed, backend will handle command resolution")
-                        except Exception as e:
-                            log.debug(f"Backend preparation failed: {e}")
+            # In Flatpak, we cannot access GNOME settings from the host
+            # The favorites functionality will work by having users manually configure desktop file names
+            log.info("Running in Flatpak - GNOME favorites cannot be auto-detected")
+            log.info("Users should manually configure favorite desktop file names")
+            return []
 
-                        log.warning("All methods to access GNOME favorites failed in Flatpak.")
-                        log.info("Consider configuring favorite apps manually in the action settings.")
-                        # Return empty list for now - backend will handle command resolution
-                        return []
-
-        # Non-Flatpak: use gsettings
+        # Non-Flatpak: use gsettings to get favorites
         try:
+            log.debug("Running gsettings to get favorite apps")
             result = subprocess.run(['gsettings', 'get', 'org.gnome.shell', 'favorite-apps'],
                                   capture_output=True, text=True, check=True)
-            return ast.literal_eval(result.stdout.strip())
+            favorites_str = result.stdout.strip()
+            favorites = ast.literal_eval(favorites_str) if favorites_str else []
+            log.info(f"Successfully loaded {len(favorites)} favorite apps: {favorites}")
+            return favorites
         except (subprocess.CalledProcessError, ValueError, SyntaxError) as e:
             log.error(f"Error retrieving favorites: {e}")
             return []
