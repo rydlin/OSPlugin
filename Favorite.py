@@ -470,15 +470,11 @@ class Favorite(ActionBase):
         # Handle reverse domain notation (org.gnome.Evolution -> evolution)
         if '.' in name:
             parts = name.split('.')
-            # For reverse domain, take the last meaningful part
-            # org.gnome.Evolution -> Evolution -> evolution
+            # For reverse domain, take the last part and convert to lowercase
             if len(parts) >= 2:
                 last_part = parts[-1]
-                # Convert CamelCase to lowercase
-                import re
-                # Split on uppercase letters and join with hyphens, then lowercase
-                command = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', last_part).lower()
-                command = re.sub(r'([A-Z])([A-Z][a-z])', r'\1-\2', command).lower()
+                # Simple lowercase conversion - most app names are already properly cased
+                command = last_part.lower()
                 log.debug(f"Extracted command '{command}' from filename '{desktop_name}'")
                 return command
 
