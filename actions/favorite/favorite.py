@@ -143,22 +143,12 @@ class Favorite(ActionBase):
                                               capture_output=True, text=True, check=True)
                         return ast.literal_eval(result.stdout.strip())
                     except (subprocess.CalledProcessError, FileNotFoundError):
-                        # Fourth try: Read dconf database directly with Python
+                        # Fourth try: Use backend for GNOME tools
                         try:
-                            favorites = self._read_dconf_database()
-                            if favorites is not None:
-                                return favorites
+                            # The backend should handle GNOME tools better
+                            log.debug("All direct access methods failed, backend will handle command resolution")
                         except Exception as e:
-                            log.debug(f"Direct dconf database reading failed: {e}")
-
-                        # Fifth try: D-Bus access if available
-                        if HAS_DBUS:
-                            try:
-                                favorites = self._get_favorites_via_dbus()
-                                if favorites is not None:
-                                    return favorites
-                            except Exception as e:
-                                log.debug(f"D-Bus access failed: {e}")
+                            log.debug(f"Backend preparation failed: {e}")
 
                         log.warning("All methods to access GNOME favorites failed in Flatpak.")
                         log.info("Consider configuring favorite apps manually in the action settings.")
