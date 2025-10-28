@@ -273,19 +273,32 @@ class Favorite(ActionBase):
         if is_in_flatpak():
             # In Flatpak, use flatpak-spawn to read the desktop file from host
             try:
-                # Find the desktop file on host using flatpak-spawn
-                result = subprocess.run(['flatpak-spawn', '--host', 'find', '/usr/share/applications', '/usr/local/share/applications',
-                                       '-name', desktop_name, '-type', 'f', '-print', '-quit'],
-                                      capture_output=True, text=True, check=True)
-                desktop_path = result.stdout.strip()
-                if not desktop_path:
-                    log.debug(f"Desktop file not found on host: {desktop_name}")
-                    return None
+                # Try multiple possible locations for the desktop file
+                possible_paths = [
+                    f'/usr/share/applications/{desktop_name}',
+                    f'/usr/local/share/applications/{desktop_name}',
+                    f'/var/lib/flatpak/exports/share/applications/{desktop_name}',
+                    os.path.expanduser(f'~/.local/share/flatpak/exports/share/applications/{desktop_name}')
+                ]
 
-                # Read the file content using flatpak-spawn
-                result = subprocess.run(['flatpak-spawn', '--host', 'cat', desktop_path],
-                                      capture_output=True, text=True, check=True)
-                content = result.stdout
+                content = None
+                desktop_path = None
+
+                # Try to read from each possible location
+                for path in possible_paths:
+                    try:
+                        result = subprocess.run(['flatpak-spawn', '--host', 'cat', path],
+                                              capture_output=True, text=True, check=True)
+                        content = result.stdout
+                        desktop_path = path
+                        log.debug(f"Successfully read desktop file from host: {path}")
+                        break
+                    except subprocess.CalledProcessError:
+                        continue
+
+                if not content:
+                    log.debug(f"Desktop file not found on host in any location: {desktop_name}")
+                    return None
 
                 # Parse the content to find Exec line
                 for line in content.splitlines():
@@ -302,7 +315,7 @@ class Favorite(ActionBase):
                 log.debug(f"No Exec= line found in host file {desktop_path}")
                 return None
 
-            except subprocess.CalledProcessError as e:
+            except Exception as e:
                 log.debug(f"Error reading desktop file from host: {e}")
                 return None
         else:
