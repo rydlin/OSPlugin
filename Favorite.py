@@ -10,7 +10,8 @@ import time
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw
+gi.require_version("Gio", "2.0")
+from gi.repository import Gtk, Adw, Gio
 
 import ast
 import glob
@@ -79,7 +80,10 @@ class Favorite(ActionBase):
         # Try multiple approaches to get the command
         command = self._get_command_from_desktop(desktop_name)
         if not command:
-            # Fallback: try to extract command from desktop filename
+            # Fallback: try GNOME App Registry
+            command = self._get_command_from_app_registry(desktop_name)
+        if not command:
+            # Last fallback: extract command from desktop filename
             command = self._extract_command_from_filename(desktop_name)
 
         if command:
@@ -456,9 +460,26 @@ class Favorite(ActionBase):
             log.debug(f"D-Bus access failed: {e}")
             return None
 
+    def _get_command_from_app_registry(self, desktop_name):
+        """
+        Get the executable command using GNOME's Gio App Registry.
+        This is more reliable than parsing filenames.
+        """
+        try:
+            app_info = Gio.DesktopAppInfo.new(desktop_name)
+            if app_info:
+                executable = app_info.get_executable()
+                if executable:
+                    log.debug(f"Found command '{executable}' for {desktop_name} via App Registry")
+                    return executable
+        except Exception as e:
+            log.debug(f"App Registry lookup failed for {desktop_name}: {e}")
+
+        return None
+
     def _extract_command_from_filename(self, desktop_name):
         """
-        Extract command from desktop filename as a fallback.
+        Extract command from desktop filename as a last resort fallback.
         Handles common patterns like org.gnome.Evolution.desktop -> evolution
         """
         if not desktop_name or not desktop_name.endswith('.desktop'):
