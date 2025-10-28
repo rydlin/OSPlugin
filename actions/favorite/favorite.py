@@ -39,23 +39,9 @@ class Favorite(ActionBase):
 
         self.has_configuration = True
 
-        # Launch the backend process - copy to user directory for Flatpak compatibility
-        backend_source = os.path.join(self.plugin_base.PATH, "actions", "favorite", "backend", "backend.py")
-        backend_dest_dir = os.path.expanduser("~/.var/app/com.core447.StreamController/data/backends")
-        os.makedirs(backend_dest_dir, exist_ok=True)
-        backend_path = os.path.join(backend_dest_dir, "favorite_backend.py")
-
-        # Copy backend file to user directory
-        try:
-            with open(backend_source, 'r') as src:
-                with open(backend_path, 'w') as dst:
-                    dst.write(src.read())
-            log.debug(f"Copied backend to user directory: {backend_path}")
-        except Exception as e:
-            log.error(f"Failed to copy backend to user directory: {e}")
-            # Fall back to original path
-            backend_path = backend_source
-
+        # Launch the backend process using the original path
+        # The backend will run in the Flatpak environment with access to all dependencies
+        backend_path = os.path.join(self.plugin_base.PATH, "actions", "favorite", "backend", "backend.py")
         self.launch_backend(backend_path=backend_path, open_in_terminal=False)
 
         try:

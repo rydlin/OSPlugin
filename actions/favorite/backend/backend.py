@@ -1,8 +1,19 @@
-from streamcontroller_plugin_tools import BackendBase
 import os
 import configparser
 import subprocess
-from loguru import logger as log
+import sys
+
+# The backend runs within the Flatpak environment, so it should have access to all dependencies
+# that are available to the main plugin
+
+try:
+    from streamcontroller_plugin_tools import BackendBase
+    from loguru import logger as log
+except ImportError as e:
+    print(f"Import error: {e}", file=sys.stderr)
+    print(f"Plugin base path: {plugin_base_path}", file=sys.stderr)
+    print(f"Python path: {sys.path}", file=sys.stderr)
+    sys.exit(1)
 
 class Backend(BackendBase):
     def __init__(self):
