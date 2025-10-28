@@ -45,6 +45,8 @@ class Favorite(ActionBase):
 
         try:
             self.favorites = self.get_favorites()
+            if not self.favorites:
+                log.warning("No favorites could be loaded - users will need to configure manually")
         except Exception as e:
             log.error(f"Failed to load favorites during initialization: {e}")
             self.favorites = []
@@ -100,17 +102,14 @@ class Favorite(ActionBase):
             log.warning("No command to run")
             return
 
-        original_command = command
-        if is_in_flatpak():
-            command = "flatpak-spawn --host " + command
-
+        # Backend already includes flatpak-spawn --host prefix when needed
         try:
             log.info(f"Running command: {command}")
             p = multiprocessing.Process(target=subprocess.Popen, args=[command], kwargs={"shell": True, "start_new_session": True, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "cwd": os.path.expanduser("~")})
             p.start()
-            log.debug(f"Started process for command: {original_command}")
+            log.debug(f"Started process for command: {command}")
         except Exception as e:
-            log.error(f"Failed to run command '{original_command}': {e}")
+            log.error(f"Failed to run command '{command}': {e}")
 
         return ""
 
