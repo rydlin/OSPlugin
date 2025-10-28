@@ -334,8 +334,8 @@ class Favorite(ActionBase):
             except UnicodeDecodeError:
                 chunk_str = chunk.decode('latin-1', errors='ignore')
 
-            # Look for desktop file patterns
-            desktop_pattern = r'([a-zA-Z0-9_-]+\.desktop)'
+            # Look for desktop file patterns (including reverse domain notation)
+            desktop_pattern = r'([a-zA-Z0-9_.-]+\.desktop)'
             matches = re.findall(desktop_pattern, chunk_str)
 
             if matches:
